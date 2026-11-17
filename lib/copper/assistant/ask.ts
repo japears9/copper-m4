@@ -52,7 +52,7 @@ const MAX_STEPS = 5;
 const MAX_RETRIES = 1;
 
 /** Give up on one model after this long and try the next one. */
-const ATTEMPT_MS = 45_000;
+const ATTEMPT_MS = 30_000;
 
 /**
  * Models to fall back to, in order, after AI_MODEL. Each has its own free
