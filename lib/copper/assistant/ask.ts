@@ -10,6 +10,7 @@ import { hasToolCall, stepCountIs, tool } from "ai";
 import { z } from "zod";
 import { callStream, THOUGHT_SUMMARIES } from "@/lib/ai/call";
 import { createLive, type Live } from "@/lib/ai/live";
+import { defaultModel, type ModelId } from "@/lib/ai/models";
 import { COPPER_INSTRUCTIONS } from "@/lib/copper/assistant/instructions";
 import type { Progress, ToolStep } from "@/lib/copper/assistant/progress";
 import {
@@ -48,7 +49,26 @@ const MAX_STEPS = 5;
  * says "slow down", wait and retry (about 2, 4, 8, 16 s) instead of failing.
  * Not exported: a "use server" file may only export async functions.
  */
-const MAX_RETRIES = 4;
+const MAX_RETRIES = 1;
+
+/** Give up on one model after this long and try the next one. */
+const ATTEMPT_MS = 45_000;
+
+/**
+ * Models to fall back to, in order, after AI_MODEL. Each has its own free
+ * daily allowance. Gemini 3 Flash is left out on purpose: Class Example 3's
+ * site uses its allowance.
+ */
+const FALLBACK_MODELS: ModelId[] = [
+  "google/gemini-3.5-flash",
+  "google/gemini-3.1-flash-lite",
+  "google/gemini-3.8-flash",
+];
+
+function modelsToTry(): ModelId[] {
+  const first = defaultModel();
+  return [first, ...FALLBACK_MODELS.filter((m) => m !== first)];
+}
 
 const SORRY = "Sorry, something went wrong on my end. Please try again.";
 
@@ -170,18 +190,48 @@ export async function askCopper({
     return handedOff;
   }
 
+  /**
+   * Runs one agent, falling back to the next model when Google says a model
+   * is overloaded or out of free requests. Anything a failed attempt showed
+   * is rolled back first, so the customer only sees the answer that worked.
+   */
+  async function followWithFallback(
+    start: (model: ModelId) => ReturnType<typeof callStream>,
+  ): Promise<boolean> {
+    let lastError: unknown = new Error("No model to try.");
+    for (const model of modelsToTry()) {
+      const before = { steps: progress.steps.length, reply: progress.reply };
+      try {
+        return await follow(start(model));
+      } catch (error) {
+        lastError = error;
+        console.error(
+          `[ask-copper] ${model} failed, trying the next model:`,
+          error instanceof Error ? error.message : String(error),
+        );
+        progress.steps.length = before.steps;
+        progress.reply = before.reply;
+        update(snapshot());
+      }
+    }
+    throw lastError;
+  }
+
   /** The Refund agent: its own instructions and tools, same conversation. */
   const refundAgent = (state: RefundState, instructions: string) =>
-    callStream(
-      { module: 4, feature: "refund-agent" },
-      {
-        messages,
-        maxRetries: MAX_RETRIES,
-        instructions,
-        tools: refundTools(state),
-        providerOptions: THOUGHT_SUMMARIES,
-        stopWhen: stepCountIs(MAX_STEPS),
-      },
+    followWithFallback((model) =>
+      callStream(
+        { module: 4, feature: "refund-agent", model },
+        {
+          messages,
+          maxRetries: MAX_RETRIES,
+          abortSignal: AbortSignal.timeout(ATTEMPT_MS),
+          instructions,
+          tools: refundTools(state),
+          providerOptions: THOUGHT_SUMMARIES,
+          stopWhen: stepCountIs(MAX_STEPS),
+        },
+      ),
     );
 
   // Read the stream in the background, so the panel gets the first update now.
@@ -198,22 +248,21 @@ export async function askCopper({
         if (statusOf(refunds, order.id) !== expected)
           throw new Error("The Refund Console doesn't show that decision.");
         progress.agent = "refund";
-        await follow(
-          refundAgent(
-            refunds,
-            consoleUpdateInstructions(order.id, consoleUpdate.decision),
-          ),
+        await refundAgent(
+          refunds,
+          consoleUpdateInstructions(order.id, consoleUpdate.decision),
         );
       } else {
         // Without tools, send no instructions either: "always use your tools"
         // with no tools makes the model answer with nothing.
         const canHandOff = useTools && refunds !== undefined;
-        const handedOff = await follow(
+        const handedOff = await followWithFallback((model) =>
           callStream(
-            { module: 2, feature: "ask-copper" },
+            { module: 2, feature: "ask-copper", model },
             {
               messages,
               maxRetries: MAX_RETRIES,
+              abortSignal: AbortSignal.timeout(ATTEMPT_MS),
               providerOptions: THOUGHT_SUMMARIES,
               ...(useTools && {
                 instructions: canHandOff
@@ -235,7 +284,7 @@ export async function askCopper({
           progress.agent = "refund";
           progress.steps.push({ type: "handoff", to: "refund" });
           update(snapshot());
-          await follow(refundAgent(refunds, REFUND_INSTRUCTIONS));
+          await refundAgent(refunds, REFUND_INSTRUCTIONS);
         }
       }
       progress.status = "done";

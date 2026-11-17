@@ -19,6 +19,17 @@ export const MODELS = [
     label: "Gemini 3.8 Flash (for keys that can't use 2.5 Flash)",
     googleId: "gemini-3.8-flash",
   },
+  {
+    // Fallbacks for Ask Copper when a model is busy or out of free requests.
+    id: "google/gemini-3.5-flash",
+    label: "Gemini 3.5 Flash (fallback)",
+    googleId: "gemini-3.5-flash",
+  },
+  {
+    id: "google/gemini-3.1-flash-lite",
+    label: "Gemini 3.1 Flash-Lite (fallback)",
+    googleId: "gemini-3.1-flash-lite",
+  },
 ] as const;
 
 export type ModelId = (typeof MODELS)[number]["id"];

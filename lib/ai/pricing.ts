@@ -7,6 +7,9 @@ export const PRICING: Record<ModelId, { input: number; output: number }> = {
   "google/gemini-3-flash": { input: 0.5, output: 3 },
   // Not on the 2026-10 price list; estimated at Gemini 3 Flash's price.
   "google/gemini-3.8-flash": { input: 0.5, output: 3 },
+  "google/gemini-3.5-flash": { input: 0.5, output: 3 },
+  // Flash-Lite models cost less; estimated at Gemini 2.5 Flash's price.
+  "google/gemini-3.1-flash-lite": { input: 0.3, output: 2.5 },
 };
 
 export function costUsd(
