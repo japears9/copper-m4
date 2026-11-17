@@ -139,3 +139,42 @@ second agent, and a person approving the large ones.
 |---|---|---|
 | Page | `app/support/page.tsx` | The "Refund Console" title and nothing else yet, linked from the header as Support |
 | Chat panel | `components/copper/ask-copper.tsx` | With the `docked` prop it starts open and the page beside it stays clickable. It is the same single agent and tools as on the home page |
+
+## Module 4: Refund agent and Refund Console
+
+**Summary:** Copper hands refund requests to a second agent, the Refund agent,
+with its own instructions and tools. A rule in code refunds orders at or under
+an auto-refund limit on the spot; anything over it waits in the Refund Console
+until a person clicks Approve or Reject, and then the Refund agent tells the
+customer.
+
+| Piece | Where | What it does |
+|---|---|---|
+| Page | `app/support/page.tsx` | The Refund Console beside Ask Copper (`<AskCopper docked refunds />`) |
+| Console | `components/copper/refund-console.tsx` | The auto-refund limit (default $100), refunds waiting for approval with Approve and Reject, and the customer's orders with their status. "Reset demo" puts everything back to paid |
+| State | `components/copper/refund-store.ts` | The limit and each order's status, shared by the console and the chat and saved in the browser (`localStorage`). Approve and Reject notify the chat |
+| Rule and orders | `lib/copper/refunds.ts` | `ORDERS` (Sam Ortiz's four orders, priced from the catalog) and `decideRefund()`: already refunded, waiting or rejected → say so; amount ≤ limit → refunded; over → waiting |
+| Hand-off | `lib/copper/assistant/ask.ts` | On the Support page Copper gets `transfer_to_refund_agent`. The call stops Copper, and the same conversation goes to the Refund agent, which writes the reply |
+| Refund agent | `lib/copper/assistant/refund-agent.ts` | `REFUND_INSTRUCTIONS` and its tools: `get_orders` and `refund_order` (which only calls `decideRefund()`). `consoleUpdateInstructions()` tells it about a person's decision |
+| Chat panel | `components/copper/ask-copper.tsx` | Sends the console state with each question, records each `refund_order` result in the console, shows the hand-off as a step and labels the reply "Refund agent". After Approve or Reject it posts a "Refund Console" note and the Refund agent tells the customer |
+| AI calls | `{ module: 2, feature: "ask-copper" }`, `{ module: 4, feature: "refund-agent" }` | One Copper call per question, plus one Refund agent call after a hand-off or a console decision |
+
+**Data flow:** customer asks for a refund → Copper calls
+`transfer_to_refund_agent` → Refund agent calls `get_orders`, then
+`refund_order` → `decideRefund()` compares the amount with the limit →
+refunded, or waiting in the console → person clicks Approve or Reject → the
+console checks the order is waiting, updates it and notifies the chat → the
+Refund agent tells the customer.
+
+**Decisions and trade-offs:** The money decision is code, not the model: the
+agent can only ask, so "a supervisor already approved it" changes nothing. Two
+agents instead of one keeps Copper's shopping and document instructions apart
+from the refund rules, and gives the Refund agent only the tools it needs. The
+console state lives in the browser so the demo needs no database; a real
+system would keep orders and refunds in a database on the server.
+
+**Risks and open questions:** Because the state comes from the browser, anyone
+could fake it; that's fine for a one-person demo but not for real money. The
+server only accepts a console decision when the state it receives shows that
+decision. A limit of 0 sends every refund to a person. Each order can be
+refunded once; asking twice returns "already refunded" or "already waiting".
